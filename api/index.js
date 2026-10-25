@@ -7,79 +7,113 @@ const app = express();
 app.use(express.json());
 app.use(cors());
 
+const sensorTables = Object.freeze({
+  outside: "outside_temperatures",
+  inside: "inside_temperatures",
+  garage: "garage_temperatures",
+});
+
+const getSensorTable = (sensor) =>
+  Object.prototype.hasOwnProperty.call(sensorTables, sensor)
+    ? sensorTables[sensor]
+    : undefined;
+
 // Middleware to check the API key
 const authenticate = (req, res, next) => {
   const providedKey = req.headers["x-api-key"];
   const validKey = process.env.API_KEY;
 
-  if (!providedKey || providedKey !== validKey) {
+  if (!validKey) {
+    return res.status(500).json({ error: "API key is not configured" });
+  }
+
+  if (typeof providedKey !== "string" || providedKey !== validKey) {
     return res.status(401).json({ error: "Unauthorized: Invalid API Key" });
   }
 
-  next(); // Key is valid, proceed to the route
+  next();
 };
 
-// Setup route (Unprotected so you can run it once easily, then you can remove this route)
-app.get("/api/setup", async (req, res) => {
+app.get("/api/setup", authenticate, async (req, res) => {
   try {
     await sql`
-      CREATE TABLE IF NOT EXISTS temperatures (
-        id SERIAL PRIMARY KEY,
-        temperature NUMERIC NOT NULL,
-        timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-      );
+      DO $$
+      BEGIN
+        IF to_regclass('temperatures') IS NOT NULL
+          AND to_regclass('outside_temperatures') IS NULL THEN
+          ALTER TABLE temperatures RENAME TO outside_temperatures;
+        END IF;
+      END;
+      $$;
     `;
-    res.status(200).json({ message: "Table created successfully" });
+
+    for (const tableName of Object.values(sensorTables)) {
+      await sql.query(`
+        CREATE TABLE IF NOT EXISTS ${tableName} (
+          id SERIAL PRIMARY KEY,
+          temperature NUMERIC NOT NULL,
+          timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+      `);
+    }
+
+    res.status(200).json({ message: "Temperature tables created successfully" });
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    console.error("Failed to create temperature tables:", error);
+    res.status(500).json({ error: "Failed to create temperature tables" });
   }
 });
 
 // POST: Save current temp AND delete entries older than 24 hours
-// Notice we added the 'authenticate' middleware here
-app.post("/api/temp", authenticate, async (req, res) => {
+app.post("/api/temp/:sensor", authenticate, async (req, res) => {
   try {
-    const { temperature } = req.body;
-
-    if (temperature === undefined) {
-      return res.status(400).json({ error: "Temperature is required" });
+    const tableName = getSensorTable(req.params.sensor);
+    if (!tableName) {
+      return res.status(404).json({ error: "Unknown temperature sensor" });
     }
 
-    // 1. Delete data older than 24 hours
-    await sql`
-      DELETE FROM temperatures 
-      WHERE timestamp < NOW() - INTERVAL '24 hours';
-    `;
+    const temperature = req.body?.temperature;
 
+    if (typeof temperature !== "number" || !Number.isFinite(temperature)) {
+      return res
+        .status(400)
+        .json({ error: "Temperature must be a finite number" });
+    }
+    // 1. Delete data older than 24 hours
+    // 1. Delete data older than 24 hours
+    await sql.query(`
+      WHERE timestamp < NOW() - INTERVAL '24 hours';
+      WHERE timestamp < NOW() - INTERVAL '24 hours';
+    `);
     // 2. Insert the new temperature
-    const result = await sql`
-      INSERT INTO temperatures (temperature) 
-      VALUES (${temperature}) 
-      RETURNING *;
-    `;
+    // 2. Insert the new temperature
+    const result = await sql.query(
+      `INSERT INTO ${tableName} (temperature) VALUES ($1) RETURNING *;`,
+      [temperature]
+    );
 
     res.status(201).json(result.rows[0]);
   } catch (error) {
-    res
-      .status(500)
-      .json({ error: "Failed to process data", details: error.message });
+    console.error("Failed to process temperature data:", error);
+    res.status(500).json({ error: "Failed to process data" });
   }
 });
 
 // GET: Retrieve data
-// Notice we added the 'authenticate' middleware here too
-app.get("/api/temp", authenticate, async (req, res) => {
+app.get("/api/temp/:sensor", authenticate, async (req, res) => {
   try {
-    const result = await sql`
-      SELECT * FROM temperatures 
-      ORDER BY timestamp DESC;
-    `;
+    const tableName = getSensorTable(req.params.sensor);
+    if (!tableName) {
+      return res.status(404).json({ error: "Unknown temperature sensor" });
+    }
 
+    const result = await sql.query(
+      `SELECT * FROM ${tableName} ORDER BY timestamp DESC;`
+    );
     res.status(200).json(result.rows);
   } catch (error) {
-    res
-      .status(500)
-      .json({ error: "Failed to fetch data", details: error.message });
+    console.error("Failed to fetch temperature data:", error);
+    res.status(500).json({ error: "Failed to fetch data" });
   }
 });
 
