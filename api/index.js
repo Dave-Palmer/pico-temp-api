@@ -57,7 +57,9 @@ app.get("/api/setup", authenticate, async (req, res) => {
       `);
     }
 
-    res.status(200).json({ message: "Temperature tables created successfully" });
+    res
+      .status(200)
+      .json({ message: "Temperature tables created successfully" });
   } catch (error) {
     console.error("Failed to create temperature tables:", error);
     res.status(500).json({ error: "Failed to create temperature tables" });
@@ -80,16 +82,14 @@ app.post("/api/temp/:sensor", authenticate, async (req, res) => {
         .json({ error: "Temperature must be a finite number" });
     }
     // 1. Delete data older than 24 hours
-    // 1. Delete data older than 24 hours
     await sql.query(`
-      WHERE timestamp < NOW() - INTERVAL '24 hours';
+      DELETE FROM ${tableName}
       WHERE timestamp < NOW() - INTERVAL '24 hours';
     `);
     // 2. Insert the new temperature
-    // 2. Insert the new temperature
     const result = await sql.query(
       `INSERT INTO ${tableName} (temperature) VALUES ($1) RETURNING *;`,
-      [temperature]
+      [temperature],
     );
 
     res.status(201).json(result.rows[0]);
@@ -108,7 +108,7 @@ app.get("/api/temp/:sensor", authenticate, async (req, res) => {
     }
 
     const result = await sql.query(
-      `SELECT * FROM ${tableName} ORDER BY timestamp DESC;`
+      `SELECT * FROM ${tableName} ORDER BY timestamp DESC;`,
     );
     res.status(200).json(result.rows);
   } catch (error) {
